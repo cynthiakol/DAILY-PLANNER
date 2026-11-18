@@ -17,6 +17,10 @@ No Windows PC handy? Push this folder to GitHub and run the "Build Windows insta
 
 Development: `npm run tauri dev`. Tests: `npm test`.
 
+## Tray icon and reminders
+Closing the window hides Daily Planner to the system tray so reminders keep working. Right-click the tray icon > **Quit** to exit completely; left-click it to reopen. If you can't see the icon, click the ^ arrow in the taskbar and drag it onto the taskbar. Launching the app again just brings the existing window forward.
+Time-blocked activities show a Windows notification at their start time (or 5-30 minutes before, see Settings > Reminders). Flexible tasks have no time, so no reminder. Reminders only fire while the app is running, and Windows Focus Assist / Do Not Disturb can silence them.
+
 ## Backup and restore
 Settings → **Download JSON backup**. Restore with **Restore from backup…** (it asks before replacing everything; invalid files are rejected and change nothing). CSV and ICS (importable into Outlook/Google Calendar) exports are in the same card.
 Your live data file is `planner.db` under `%APPDATA%\app.local.dailyplanner\`. Updating or reinstalling the app does not touch it; uninstalling may offer to delete it, so back up first.

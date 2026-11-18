@@ -83,4 +83,20 @@ describe('planner logic', () => {
     expect(ics).toContain('RRULE:FREQ=WEEKLY;BYDAY=MO,WE'); expect(ics).toContain('DTSTART:20261124T063000'); expect(ics).toContain('DTSTART;VALUE=DATE:20261124');
     expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2);
   });
+
+  it('fires reminders once, only for timed unfinished activities in their window', () => {
+    const a = act({ title: 'Run', date: '2026-11-24', start: '06:30', end: '07:15' }), flex = act({ title: 'Flex', date: '2026-11-24' });
+    const s = add(empty(), a, flex), at = (h: number, m: number) => new Date(2026, 10, 24, h, m);
+    const fired = new Set<string>();
+    expect(L.dueReminders(s, at(6, 29), fired)).toHaveLength(0);
+    const due = L.dueReminders(s, at(6, 30), fired);
+    expect(due.map(x => x.title)).toEqual(['Run']);
+    fired.add(due[0].key);
+    expect(L.dueReminders(s, at(6, 31), fired)).toHaveLength(0);
+    expect(L.dueReminders(s, at(7, 15), new Set())).toHaveLength(0);
+    expect(L.dueReminders(add(empty(), { ...a, status: 'completed' }), at(6, 40), new Set())).toHaveLength(0);
+    expect(L.dueReminders(add(empty(), { ...a, remind: false }), at(6, 40), new Set())).toHaveLength(0);
+    expect(L.dueReminders(L.itemsForDate(s, '2026-11-25').length ? s : { ...s, settings: { ...s.settings, remind: false } }, at(6, 40), new Set())).toHaveLength(0);
+    expect(L.dueReminders({ ...s, settings: { ...s.settings, lead: 10 } }, at(6, 20), new Set())[0].body).toMatch(/in 10 min/);
+  });
 });

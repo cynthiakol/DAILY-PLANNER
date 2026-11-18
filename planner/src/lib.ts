@@ -5,11 +5,11 @@ export interface Rule { type: 'daily' | 'weekly' | 'weekdays'; days: number[]; u
 export interface Activity {
   id: string; title: string; notes: string; category: string; priority: Priority; status: Status;
   date: string; start?: string; end?: string; background?: boolean; order: number;
-  rule?: Rule; overrides: Record<string, Status>; // per-date status for recurring series
+  remind?: boolean; rule?: Rule; overrides: Record<string, Status>; // per-date status for recurring series
 }
 export type TItem = Pick<Activity, 'title' | 'notes' | 'category' | 'priority' | 'start' | 'end' | 'background'>;
 export interface Template { id: string; name: string; items: TItem[] }
-export interface Settings { theme: 'dark' | 'light'; weekStart: 0 | 1 | 6 }
+export interface Settings { theme: 'dark' | 'light'; weekStart: 0 | 1 | 6; remind?: boolean; lead?: number }
 export interface State { version: 1; activities: Activity[]; templates: Template[]; categories: string[]; settings: Settings }
 
 export const DEFAULT_CATS = ['Gaming', 'Exercise', 'School/Work', 'Personal', 'Chores', 'Entertainment'];
@@ -103,7 +103,7 @@ export function seed(t: string): State {
     mk({ title: 'Running', category: 'Exercise', priority: 'high', start: '06:30', end: '07:15', rule: { type: 'weekdays', days: [1, 3, 5] }, order: 3 }),
   ];
   const items = activities.filter(a => !a.start).map(a => ({ title: a.title, notes: a.notes, category: a.category, priority: a.priority, background: a.background }));
-  return { version: 1, activities, templates: [{ id: uid(), name: 'Gaming dailies', items }], categories: [...DEFAULT_CATS], settings: { theme: 'dark', weekStart: 1 } };
+  return { version: 1, activities, templates: [{ id: uid(), name: 'Gaming dailies', items }], categories: [...DEFAULT_CATS], settings: { theme: 'dark', weekStart: 1, remind: true, lead: 0 } };
 }
 
 // ---- backup / export ----
@@ -113,7 +113,7 @@ export function parseBackup(text: string): State {
   const acts: Activity[] = o.activities.map((a: any) => ({ notes: '', category: 'Personal', priority: 'normal', status: 'not_started', order: 0, overrides: {}, ...a }));
   for (const a of acts) { const e = validateActivity(a); if (e) throw new Error(`Invalid activity "${a?.title}": ${e}`); }
   const st = o.settings ?? {};
-  return { version: 1, activities: acts, templates: o.templates, categories: o.categories.map(String), settings: { theme: st.theme === 'light' ? 'light' : 'dark', weekStart: [0, 1, 6].includes(st.weekStart) ? st.weekStart : 1 } };
+  return { version: 1, activities: acts, templates: o.templates, categories: o.categories.map(String), settings: { theme: st.theme === 'light' ? 'light' : 'dark', weekStart: [0, 1, 6].includes(st.weekStart) ? st.weekStart : 1, remind: st.remind !== false, lead: [0, 5, 10, 15, 30].includes(st.lead) ? st.lead : 0 } };
 }
 const csvCell = (v: unknown) => { const t = String(v ?? ''); return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
 export function toCSV(s: State): string {
@@ -140,4 +140,21 @@ export function toICS(s: State): string {
     lines.push('END:VEVENT');
   }
   lines.push('END:VCALENDAR'); return lines.join('\r\n');
+}
+
+// ---- reminders: pure, so it can be tested. Only time-blocked, unfinished activities of the current day, once each. ----
+export interface Due { key: string; title: string; body: string }
+export function dueReminders(s: State, now: Date, fired: Set<string>): Due[] {
+  if (s.settings.remind === false) return [];
+  const lead = s.settings.lead ?? 0, d = fmt(now), nowMin = now.getHours() * 60 + now.getMinutes(), out: Due[] = [];
+  for (const a of itemsForDate(s, d)) {
+    if (!a.start || !a.end || a.remind === false) continue;
+    const st = statusOn(a, d), key = `${a.id}|${d}`;
+    if (st === 'completed' || st === 'skipped' || fired.has(key)) continue;
+    if (nowMin >= toMin(a.start) - lead && nowMin < toMin(a.end)) {
+      const m = toMin(a.start) - nowMin;
+      out.push({ key, title: a.title, body: m > 0 ? `Starts at ${a.start} (in ${m} min)` : `Starts now · ${a.start}–${a.end}` });
+    }
+  }
+  return out;
 }

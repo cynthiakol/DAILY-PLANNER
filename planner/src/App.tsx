@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as L from './lib';
 import { load, save } from './storage';
+import { notify } from './notify';
 import './style.css';
 
 type View = 'dashboard' | 'calendar' | 'activities' | 'templates' | 'history' | 'settings';
 type Cal = 'month' | 'week' | 'day' | 'agenda';
 const SL: Record<string, string> = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed', skipped: 'Skipped' };
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const NAV: [View, string][] = [['dashboard', '🏠 Dashboard'], ['calendar', '📅 Calendar'], ['activities', '✅ Activities'], ['templates', '📋 Templates'], ['history', '🕘 History'], ['settings', '⚙️ Settings']];
+const NAV: [View, string, string][] = [['dashboard', '🏠', 'Dashboard'], ['calendar', '📅', 'Calendar'], ['activities', '✅', 'Activities'], ['templates', '📋', 'Templates'], ['history', '🕘', 'History'], ['settings', '⚙️', 'Settings']];
 
 interface Act {
   toggle(a: L.Activity, d: string): void; status(a: L.Activity, d: string, s: L.Status): void; edit(a: L.Activity): void;
@@ -35,6 +36,20 @@ export default function App() {
   useEffect(() => { if (st && loaded.current) save(st).catch(e => flash('Save failed: ' + (e.message ?? e))); }, [st]);
   useEffect(() => { document.documentElement.dataset.theme = st?.settings.theme ?? 'dark'; }, [st?.settings.theme]);
 
+  const stRef = useRef(st); stRef.current = st;
+  useEffect(() => { // reminder checker: runs while the app is alive (including hidden in the tray)
+    let fired = new Set<string>();
+    try { fired = new Set<string>(JSON.parse(localStorage.getItem('planner.fired') || '[]')); } catch { /* ignore */ }
+    const tick = () => {
+      const s = stRef.current; if (!s || !loaded.current) return;
+      const now = new Date(), t = L.fmt(now);
+      for (const k of [...fired]) if (!k.endsWith('|' + t)) fired.delete(k);
+      for (const d of L.dueReminders(s, now, fired)) { fired.add(d.key); notify('⏰ ' + d.title, d.body); flash('⏰ ' + d.title + ' — ' + d.body); }
+      try { localStorage.setItem('planner.fired', JSON.stringify([...fired])); } catch { /* ignore */ }
+    };
+    tick(); const id = setInterval(tick, 15000); return () => clearInterval(id);
+  }, []);
+
   if (fatal) return <div className="center"><h2>Could not load your data</h2><p>{fatal}</p><p>Nothing was overwritten. See the README troubleshooting section.</p></div>;
   if (!st) return <div className="center">Loading…</div>;
   const ws = st.settings.weekStart;
@@ -54,7 +69,7 @@ export default function App() {
     <div className="app">
       <nav className="side" aria-label="Main">
         <div className="brand">🗓 Planner</div>
-        {NAV.map(([v, t]) => <button key={v} className={view === v ? 'nav on' : 'nav'} aria-current={view === v} onClick={() => setView(v)}>{t}</button>)}
+        {NAV.map(([v, e, t]) => <button key={v} className={view === v ? 'nav on' : 'nav'} aria-current={view === v} onClick={() => setView(v)}><span className="ic" aria-hidden="true">{e}</span><span className="lb">{t}</span></button>)}
       </nav>
       <main className="main">
         {view === 'dashboard' && <Dashboard st={st} act={act} open={open} onNew={() => newAct(L.today())} />}
@@ -84,9 +99,11 @@ function Row({ a, d, act, first, last, clash, noOrder }: { a: L.Activity; d: str
         </div>
         {a.notes && <div className="notes">{a.notes}</div>}
       </div>
+      <div className="ctl">
       <select aria-label="Status" value={s} onChange={e => act.status(a, d, e.target.value as L.Status)}>{L.STATUSES.map(x => <option key={x} value={x}>{SL[x]}</option>)}</select>
       {!noOrder && !a.start && <><button aria-label="Move up" disabled={first} onClick={() => act.move(a, d, -1)}>↑</button><button aria-label="Move down" disabled={last} onClick={() => act.move(a, d, 1)}>↓</button></>}
       <button aria-label="Edit" onClick={() => act.edit(a)}>✏️</button><button aria-label="Duplicate" onClick={() => act.dup(a)}>⧉</button><button aria-label="Delete" onClick={() => act.del(a)}>🗑</button>
+    </div>
     </li>
   );
 }
@@ -110,6 +127,7 @@ function Month({ cur, st, onPick, mini }: { cur: string; st: L.State; onPick: (d
       return <button key={d} className={'cell' + (d.slice(0, 7) !== cur.slice(0, 7) ? ' other' : '') + (d === t ? ' today' : '') + (d === cur ? ' sel' : '')} aria-label={L.label(d) + `, ${it.length} activities`} onClick={() => onPick(d)}>
         <span className="n">{Number(d.slice(8))}</span>
         {mini ? (it.length > 0 && <span className="dot" />) : it.slice(0, 3).map(a => <span key={a.id} className="chip">{a.title}</span>)}
+        {!mini && it.length > 0 && <span className="dot only-m" />}
         {!mini && it.length > 3 && <span className="more">+{it.length - 3} more</span>}
       </button>;
     })}
@@ -216,6 +234,11 @@ function SettingsView({ st, mut, flash, setConfirm }: { st: L.State; mut: (f: (s
     <div className="card"><h3>Appearance</h3><div className="toolbar">
       <label>Theme <select value={st.settings.theme} onChange={e => mut(s => ({ ...s, settings: { ...s.settings, theme: e.target.value as 'dark' | 'light' } }))}><option value="dark">Dark</option><option value="light">Light</option></select></label>
       <label>First day of week <select value={st.settings.weekStart} onChange={e => mut(s => ({ ...s, settings: { ...s.settings, weekStart: Number(e.target.value) as 0 | 1 | 6 } }))}><option value={0}>Sunday</option><option value={1}>Monday</option><option value={6}>Saturday</option></select></label></div></div>
+    <div className="card"><h3>Reminders</h3><div className="toolbar">
+      <label className="chk"><input type="checkbox" checked={st.settings.remind !== false} onChange={e => mut(s => ({ ...s, settings: { ...s.settings, remind: e.target.checked } }))} /> Notify me for time-blocked activities</label>
+      <label>Notify <select value={st.settings.lead ?? 0} onChange={e => mut(s => ({ ...s, settings: { ...s.settings, lead: Number(e.target.value) } }))}><option value={0}>At start time</option><option value={5}>5 minutes before</option><option value={10}>10 minutes before</option><option value={15}>15 minutes before</option><option value={30}>30 minutes before</option></select></label>
+      <button onClick={async () => flash((await notify('Daily Planner', 'Test notification: reminders are working.')) ? 'Notification sent' : 'Notifications are blocked. Allow them in Windows Settings.')}>Send test notification</button></div>
+      <p className="sub">Reminders fire only while the app is running (closing the window keeps it in the system tray). Anytime/flexible tasks have no time, so they never trigger reminders.</p></div>
     <div className="card"><h3>Categories</h3><div className="chips">{st.categories.map(c => <span key={c} className="tag">{c} <button aria-label={`Remove ${c}`} className="x" onClick={() => setConfirm({ msg: `Remove category "${c}"? Existing activities keep their label.`, ok: () => mut(s => ({ ...s, categories: s.categories.filter(x => x !== c) })) })}>×</button></span>)}</div>
       <div className="toolbar"><input placeholder="New category" aria-label="New category" value={cat} onChange={e => setCat(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCat()} /><button onClick={addCat}>Add</button></div></div>
     <div className="card"><h3>Backup &amp; export</h3><div className="toolbar">
@@ -227,16 +250,16 @@ function SettingsView({ st, mut, flash, setConfirm }: { st: L.State; mut: (f: (s
   </>;
 }
 
-interface F { title: string; notes: string; category: string; priority: string; status: string; date: string; timed: boolean; start: string; end: string; background: boolean; repeat: string; days: number[]; until: string }
+interface F { title: string; notes: string; category: string; priority: string; status: string; date: string; timed: boolean; start: string; end: string; background: boolean; repeat: string; days: number[]; until: string; remind: boolean }
 function Editor({ init, cats, onSave, onClose }: { init: Partial<L.Activity>; cats: string[]; onSave: (a: L.Activity) => void; onClose: () => void }) {
   const r = init.rule;
-  const [f, setF] = useState<F>({ title: init.title ?? '', notes: init.notes ?? '', category: init.category ?? cats[0] ?? 'Personal', priority: init.priority ?? 'normal', status: init.status ?? 'not_started', date: init.date ?? L.today(), timed: !!init.start, start: init.start ?? '09:00', end: init.end ?? '10:00', background: !!init.background, repeat: r?.type ?? 'none', days: r?.days?.length ? r.days : [1, 2, 3, 4, 5], until: r?.until ?? '' });
+  const [f, setF] = useState<F>({ title: init.title ?? '', notes: init.notes ?? '', category: init.category ?? cats[0] ?? 'Personal', priority: init.priority ?? 'normal', status: init.status ?? 'not_started', date: init.date ?? L.today(), timed: !!init.start, start: init.start ?? '09:00', end: init.end ?? '10:00', background: !!init.background, repeat: r?.type ?? 'none', days: r?.days?.length ? r.days : [1, 2, 3, 4, 5], until: r?.until ?? '', remind: init.remind !== false });
   const [err, setErr] = useState('');
   const set = (k: keyof F, v: any) => setF(p => ({ ...p, [k]: v }));
   const catList = cats.includes(f.category) ? cats : [...cats, f.category];
   const submit = () => {
     const rule: L.Rule | undefined = f.repeat === 'none' ? undefined : { type: f.repeat as L.Rule['type'], days: f.repeat === 'weekdays' ? [...f.days].sort() : [], ...(f.until ? { until: f.until } : {}) };
-    const a: L.Activity = { id: init.id ?? L.uid(), title: f.title.trim(), notes: f.notes, category: f.category, priority: f.priority as L.Priority, status: rule ? 'not_started' : (f.status as L.Status), date: f.date, start: f.timed ? f.start : undefined, end: f.timed ? f.end : undefined, background: f.background || undefined, order: init.order ?? 0, overrides: init.overrides ?? {}, rule };
+    const a: L.Activity = { id: init.id ?? L.uid(), title: f.title.trim(), notes: f.notes, category: f.category, priority: f.priority as L.Priority, status: rule ? 'not_started' : (f.status as L.Status), date: f.date, start: f.timed ? f.start : undefined, end: f.timed ? f.end : undefined, background: f.background || undefined, remind: f.timed && !f.remind ? false : undefined, order: init.order ?? 0, overrides: init.overrides ?? {}, rule };
     const e = L.validateActivity(a); if (e) return setErr(e); onSave(a);
   };
   return <div className="modal" role="dialog" aria-modal="true" aria-label="Activity editor" onKeyDown={e => e.key === 'Escape' && onClose()}>
@@ -249,6 +272,7 @@ function Editor({ init, cats, onSave, onClose }: { init: Partial<L.Activity>; ca
       <div className="two"><label>{f.repeat === 'none' ? 'Date' : 'Starts on'}<input type="date" value={f.date} onChange={e => set('date', e.target.value)} /></label>
         {f.repeat === 'none' && <label>Status<select value={f.status} onChange={e => set('status', e.target.value)}>{L.STATUSES.map(c => <option key={c} value={c}>{SL[c]}</option>)}</select></label>}</div>
       <label className="chk"><input type="checkbox" checked={f.timed} onChange={e => set('timed', e.target.checked)} /> Time-block this activity (otherwise it goes under Anytime / Flexible)</label>
+      {f.timed && <label className="chk"><input type="checkbox" checked={f.remind} onChange={e => set('remind', e.target.checked)} /> Remind me with a notification</label>}
       {f.timed && <div className="two"><label>Start<input type="time" value={f.start} onChange={e => set('start', e.target.value)} /></label><label>End<input type="time" value={f.end} onChange={e => set('end', e.target.value)} /></label></div>}
       <label className="chk"><input type="checkbox" checked={f.background} onChange={e => set('background', e.target.checked)} /> Background task (AFK) — never counts as a scheduling conflict</label>
       <div className="two"><label>Repeat<select value={f.repeat} onChange={e => set('repeat', e.target.value)}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="weekdays">Selected weekdays</option></select></label>
